@@ -187,6 +187,7 @@ app.get('/api/users/:uid', async (req, res) => {
 app.get('/api/leads', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM leads ORDER BY created_at DESC');
+    console.log(`📊 /api/leads: 資料庫查詢結果，共 ${result.rows.length} 筆案件`);
     const leads = result.rows.map(row => {
       // 處理 JSONB 欄位
       let progress_updates = [];
@@ -412,6 +413,146 @@ app.get('/', (req, res) => {
       connected: '檢查 /health 端點'
     }
   });
+});
+
+// 自動遷移端點 - 從前端接收 localStorage 資料並自動插入
+app.post('/api/migrate', async (req, res) => {
+  try {
+    const { users, leads, auditLogs } = req.body;
+    
+    if (!users && !leads && !auditLogs) {
+      return res.status(400).json({ error: '請提供要遷移的資料' });
+    }
+
+    const results = {
+      users: { inserted: 0, errors: [] },
+      leads: { inserted: 0, errors: [] },
+      auditLogs: { inserted: 0, errors: [] }
+    };
+
+    // 遷移使用者
+    if (users && Object.keys(users).length > 0) {
+      const userList = Object.values(users);
+      for (const user of userList) {
+        try {
+          await pool.query(
+            `INSERT INTO users (id, email, display_name, role, avatar, status, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              user.uid || user.id,
+              user.email || '',
+              user.displayName || user.display_name || '',
+              user.role || 'REVIEWER',
+              user.avatar || null,
+              user.status || null,
+              user.createdAt || user.created_at || new Date().toISOString()
+            ]
+          );
+          results.users.inserted++;
+        } catch (err) {
+          results.users.errors.push({ user: user.uid || user.id, error: err.message });
+        }
+      }
+    }
+
+    // 遷移案件
+    if (leads && Array.isArray(leads) && leads.length > 0) {
+      for (const lead of leads) {
+        try {
+          await pool.query(
+            `INSERT INTO leads (
+              id, platform, platform_id, need, budget_text, posted_at,
+              phone, email, location, note, internal_remarks, remarks_author,
+              status, decision, decision_by, reject_reason, review_note,
+              assigned_to, assigned_to_name, priority, created_by, created_by_name,
+              created_at, updated_at, last_action_by, progress_updates, change_history
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+              $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27
+            ) ON CONFLICT (id) DO NOTHING`,
+            [
+              lead.id,
+              lead.platform || 'FB',
+              lead.platform_id || null,
+              lead.need || '',
+              lead.budget_text || null,
+              lead.posted_at ? new Date(lead.posted_at) : null,
+              lead.phone || null,
+              lead.email || null,
+              lead.location || null,
+              lead.note || null,
+              lead.internal_remarks || null,
+              lead.remarks_author || null,
+              lead.status || '待篩選',
+              lead.decision || 'pending',
+              lead.decision_by || null,
+              lead.reject_reason || null,
+              lead.review_note || null,
+              lead.assigned_to || null,
+              lead.assigned_to_name || null,
+              lead.priority || 3,
+              lead.created_by || null,
+              lead.created_by_name || '',
+              lead.created_at ? new Date(lead.created_at) : new Date(),
+              lead.updated_at ? new Date(lead.updated_at) : new Date(),
+              lead.last_action_by || null,
+              lead.progress_updates ? JSON.stringify(lead.progress_updates) : null,
+              lead.change_history ? JSON.stringify(lead.change_history) : null
+            ]
+          );
+          results.leads.inserted++;
+        } catch (err) {
+          results.leads.errors.push({ lead: lead.id, error: err.message });
+        }
+      }
+    }
+
+    // 遷移審計日誌
+    if (auditLogs && Array.isArray(auditLogs) && auditLogs.length > 0) {
+      for (const log of auditLogs) {
+        try {
+          await pool.query(
+            `INSERT INTO audit_logs (id, lead_id, actor_uid, actor_name, action, before, after, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (id) DO NOTHING`,
+            [
+              log.id,
+              log.lead_id || null,
+              log.actor_uid || null,
+              log.actor_name || '',
+              log.action || '',
+              log.before ? JSON.stringify(log.before) : null,
+              log.after ? JSON.stringify(log.after) : null,
+              log.created_at ? new Date(log.created_at) : new Date()
+            ]
+          );
+          results.auditLogs.inserted++;
+        } catch (err) {
+          results.auditLogs.errors.push({ log: log.id, error: err.message });
+        }
+      }
+    }
+
+    console.log(`✅ 自動遷移完成:`, {
+      users: `${results.users.inserted} 個`,
+      leads: `${results.leads.inserted} 筆`,
+      auditLogs: `${results.auditLogs.inserted} 筆`
+    });
+
+    res.json({
+      success: true,
+      message: `成功遷移：${results.users.inserted} 個使用者、${results.leads.inserted} 筆案件、${results.auditLogs.inserted} 筆審計日誌`,
+      results
+    });
+  } catch (error) {
+    console.error('自動遷移失敗:', error);
+    res.status(500).json({
+      success: false,
+      error: '自動遷移失敗',
+      details: error.message
+    });
+  }
 });
 
 // 診斷端點 - 檢查資料庫狀態
