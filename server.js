@@ -16,20 +16,78 @@ const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+// PostgreSQL 連接池配置函數
+const getDbConfig = () => {
+  // 嘗試多種可能的環境變數名稱格式（Zeabur 可能使用不同的變數名）
+  const host = process.env.POSTGRES_HOST || 
+               process.env.DB_HOST || 
+               process.env.DATABASE_HOST ||
+               process.env.POSTGRESQL_HOST;
+  
+  const port = parseInt(
+    process.env.POSTGRES_PORT || 
+    process.env.DB_PORT || 
+    process.env.DATABASE_PORT ||
+    process.env.POSTGRESQL_PORT ||
+    '5432'
+  );
+  
+  const database = process.env.POSTGRES_DATABASE || 
+                   process.env.DB_NAME || 
+                   process.env.DATABASE_NAME ||
+                   process.env.POSTGRESQL_DATABASE ||
+                   process.env.POSTGRES_DB;
+  
+  const user = process.env.POSTGRES_USER || 
+               process.env.DB_USER || 
+               process.env.DATABASE_USER ||
+               process.env.POSTGRESQL_USER ||
+               process.env.POSTGRES_USERNAME;
+  
+  const password = process.env.POSTGRES_PASSWORD || 
+                   process.env.DB_PASSWORD || 
+                   process.env.DATABASE_PASSWORD ||
+                   process.env.POSTGRESQL_PASSWORD;
+  
+  // 檢查是否所有必要的配置都存在
+  if (!host || !database || !user || !password) {
+    console.error('❌ 資料庫配置不完整:');
+    console.error('  Host:', host || '未設置');
+    console.error('  Database:', database || '未設置');
+    console.error('  User:', user || '未設置');
+    console.error('  Password:', password ? '***已設置***' : '未設置');
+    console.error('\n可用的環境變數:');
+    const dbEnvVars = Object.keys(process.env).filter(k => 
+      k.includes('POSTGRES') || k.includes('DB') || k.includes('DATABASE')
+    );
+    if (dbEnvVars.length > 0) {
+      console.error(dbEnvVars.join(', '));
+    } else {
+      console.error('(沒有找到資料庫相關的環境變數)');
+    }
+  }
+  
+  return {
+    host,
+    port,
+    database,
+    user,
+    password,
+    ssl: process.env.POSTGRES_SSL === 'true' || 
+         process.env.DB_SSL === 'true' || 
+         process.env.DATABASE_SSL === 'true' ||
+         process.env.POSTGRESQL_SSL === 'true'
+      ? { rejectUnauthorized: false } 
+      : false,
+    connectionTimeoutMillis: 5000,
+    idleTimeoutMillis: 30000,
+    max: 10
+  };
+};
+
 // PostgreSQL 連接池
-const pool = new Pool({
-  host: process.env.DB_HOST || process.env.POSTGRES_HOST,
-  port: parseInt(process.env.DB_PORT || process.env.POSTGRES_PORT || '5432'),
-  database: process.env.DB_NAME || process.env.POSTGRES_DATABASE,
-  user: process.env.DB_USER || process.env.POSTGRES_USER,
-  password: process.env.DB_PASSWORD || process.env.POSTGRES_PASSWORD,
-  ssl: process.env.DB_SSL === 'true' || process.env.POSTGRES_SSL === 'true' 
-    ? { rejectUnauthorized: false } 
-    : false,
-  connectionTimeoutMillis: 5000,
-  idleTimeoutMillis: 30000,
-  max: 10
-});
+const dbConfig = getDbConfig();
+const pool = new Pool(dbConfig);
 
 // 測試資料庫連接
 pool.on('connect', () => {
@@ -45,26 +103,24 @@ setTimeout(() => {
   pool.query('SELECT NOW()')
     .then(() => {
       console.log('✅ PostgreSQL 連接測試成功');
-      const config = getDbConfig();
       console.log('📊 資料庫連接資訊:', {
-        host: config.host,
-        database: config.database,
-        user: config.user,
-        port: config.port,
-        hasPassword: !!config.password,
-        ssl: config.ssl ? '啟用' : '停用'
+        host: dbConfig.host,
+        database: dbConfig.database,
+        user: dbConfig.user,
+        port: dbConfig.port,
+        hasPassword: !!dbConfig.password,
+        ssl: dbConfig.ssl ? '啟用' : '停用'
       });
     })
     .catch((err) => {
       console.error('❌ PostgreSQL 連接測試失敗:', err.message);
-      const config = getDbConfig();
       console.error('📊 當前連接配置:', {
-        host: config.host || '❌ 未設置',
-        database: config.database || '❌ 未設置',
-        user: config.user || '❌ 未設置',
-        port: config.port,
-        hasPassword: config.password ? '✅ 已設置' : '❌ 未設置',
-        ssl: config.ssl ? '啟用' : '停用'
+        host: dbConfig.host || '❌ 未設置',
+        database: dbConfig.database || '❌ 未設置',
+        user: dbConfig.user || '❌ 未設置',
+        port: dbConfig.port,
+        hasPassword: dbConfig.password ? '✅ 已設置' : '❌ 未設置',
+        ssl: dbConfig.ssl ? '啟用' : '停用'
       });
       console.error('\n💡 請在 Zeabur 後端服務的環境變數中設置:');
       console.error('   POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER, POSTGRES_PASSWORD');
