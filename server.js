@@ -253,13 +253,53 @@ app.get('/api/audit-logs', async (req, res) => {
   }
 });
 
+// 根路徑 - API 資訊
+app.get('/', (req, res) => {
+  res.json({
+    name: 'CaseFlow CRM API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: '/health',
+      users: {
+        getAll: 'GET /api/users',
+        getOne: 'GET /api/users/:uid'
+      },
+      leads: {
+        getAll: 'GET /api/leads',
+        create: 'POST /api/leads',
+        update: 'PUT /api/leads/:id',
+        delete: 'DELETE /api/leads/:id'
+      },
+      auditLogs: {
+        getAll: 'GET /api/audit-logs',
+        getByLead: 'GET /api/audit-logs?leadId=xxx'
+      }
+    },
+    database: {
+      host: process.env.DB_HOST || process.env.POSTGRES_HOST || '未設置',
+      database: process.env.DB_NAME || process.env.POSTGRES_DATABASE || '未設置',
+      connected: '檢查 /health 端點'
+    }
+  });
+});
+
 // 健康檢查
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'ok', database: 'connected' });
+    res.json({ 
+      status: 'ok', 
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
-    res.status(500).json({ status: 'error', database: 'disconnected' });
+    res.status(500).json({ 
+      status: 'error', 
+      database: 'disconnected',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
@@ -267,4 +307,6 @@ app.get('/health', async (req, res) => {
 app.listen(port, () => {
   console.log(`🚀 後端 API 服務運行在 http://localhost:${port}`);
   console.log(`📊 資料庫: ${process.env.DB_NAME || process.env.POSTGRES_DATABASE || '未設置'}`);
+  console.log(`📡 API 文檔: http://localhost:${port}/`);
+  console.log(`❤️  健康檢查: http://localhost:${port}/health`);
 });
