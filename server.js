@@ -41,19 +41,35 @@ pool.on('error', (err) => {
 });
 
 // 啟動時測試連接
-pool.query('SELECT NOW()')
-  .then(() => {
-    console.log('✅ PostgreSQL 連接測試成功');
-  })
-  .catch((err) => {
-    console.error('❌ PostgreSQL 連接測試失敗:', err.message);
-    console.error('連接資訊:', {
-      host: process.env.DB_HOST || process.env.POSTGRES_HOST || '未設置',
-      database: process.env.DB_NAME || process.env.POSTGRES_DATABASE || '未設置',
-      user: process.env.DB_USER || process.env.POSTGRES_USER || '未設置',
-      hasPassword: !!(process.env.DB_PASSWORD || process.env.POSTGRES_PASSWORD)
+setTimeout(() => {
+  pool.query('SELECT NOW()')
+    .then(() => {
+      console.log('✅ PostgreSQL 連接測試成功');
+      const config = getDbConfig();
+      console.log('📊 資料庫連接資訊:', {
+        host: config.host,
+        database: config.database,
+        user: config.user,
+        port: config.port,
+        hasPassword: !!config.password,
+        ssl: config.ssl ? '啟用' : '停用'
+      });
+    })
+    .catch((err) => {
+      console.error('❌ PostgreSQL 連接測試失敗:', err.message);
+      const config = getDbConfig();
+      console.error('📊 當前連接配置:', {
+        host: config.host || '❌ 未設置',
+        database: config.database || '❌ 未設置',
+        user: config.user || '❌ 未設置',
+        port: config.port,
+        hasPassword: config.password ? '✅ 已設置' : '❌ 未設置',
+        ssl: config.ssl ? '啟用' : '停用'
+      });
+      console.error('\n💡 請在 Zeabur 後端服務的環境變數中設置:');
+      console.error('   POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER, POSTGRES_PASSWORD');
     });
-  });
+}, 2000); // 延遲 2 秒，確保環境變數已載入
 
 // ==================== 使用者 API ====================
 
