@@ -515,8 +515,12 @@ app.put('/api/leads/:id', async (req, res) => {
     
     // 處理每個更新欄位
     for (const key in updates) {
-      if (key === 'id' || key === 'created_at' || key === 'created_by' || key === 'created_by_name') {
-        // 跳過這些欄位，不允許更新
+      // 跳過這些欄位，不允許更新或會手動處理
+      if (key === 'id' || 
+          key === 'created_at' || 
+          key === 'created_by' || 
+          key === 'created_by_name' ||
+          key === 'updated_at') {  // 跳過 updated_at，我們會手動設定
         continue;
       }
       
@@ -531,8 +535,8 @@ app.put('/api/leads/:id', async (req, res) => {
         continue;
       }
       
-      // 特殊處理日期欄位
-      if (key === 'posted_at' || key === 'updated_at') {
+      // 特殊處理日期欄位（posted_at）
+      if (key === 'posted_at') {
         updateFields.push(`${dbFieldName} = $${paramIndex}`);
         values.push(value ? new Date(value) : null);
         paramIndex++;
@@ -549,10 +553,8 @@ app.put('/api/leads/:id', async (req, res) => {
       return res.status(400).json({ error: '沒有要更新的欄位' });
     }
     
-    // 添加 updated_at
-    updateFields.push(`updated_at = $${paramIndex}`);
-    values.push(now);
-    paramIndex++;
+    // 注意：不手動設定 updated_at，讓資料庫觸發器自動處理
+    // 資料庫有 BEFORE UPDATE 觸發器會自動更新 updated_at
     
     // 添加 WHERE 條件的 ID
     values.push(id);
