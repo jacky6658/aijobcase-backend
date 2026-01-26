@@ -137,6 +137,12 @@ app.get('/api/users', async (req, res) => {
     const result = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
     const users = {};
     result.rows.forEach(row => {
+      // 安全地獲取 is_online 和 last_seen（如果字段不存在則為 undefined）
+      const isOnline = row.hasOwnProperty('is_online') ? (row.is_online || false) : false;
+      const lastSeen = row.hasOwnProperty('last_seen') && row.last_seen 
+        ? new Date(row.last_seen).toISOString() 
+        : null;
+      
       users[row.id] = {
         uid: row.id,
         email: row.email,
@@ -146,19 +152,33 @@ app.get('/api/users', async (req, res) => {
         status: row.status,
         createdAt: row.created_at,
         isActive: row.is_active !== false, // 預設為啟用
-        isOnline: row.is_online || false, // 在線狀態
-        lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null // 最後上線時間
+        isOnline: isOnline, // 在線狀態
+        lastSeen: lastSeen // 最後上線時間
       };
     });
+    
+    const onlineCount = Object.values(users).filter(u => u.isOnline).length;
+    console.log(`📊 獲取用戶列表: 總共 ${result.rows.length} 個用戶，${onlineCount} 個在線`);
+    
     res.json(users);
   } catch (error) {
     console.error('獲取使用者失敗:', error);
     console.error('錯誤詳情:', error.message, error.stack);
-    res.status(500).json({ 
-      error: '獲取使用者失敗',
-      details: error.message,
-      hint: '請檢查資料庫連接和表結構'
-    });
+    
+    // 如果錯誤是因為字段不存在，提供明確的提示
+    if (error.message && error.message.includes('is_online')) {
+      res.status(500).json({ 
+        error: '資料庫字段缺失',
+        details: '請執行資料庫遷移腳本添加 is_online 和 last_seen 字段',
+        hint: '執行 scripts/add-online-status-columns.sql'
+      });
+    } else {
+      res.status(500).json({ 
+        error: '獲取使用者失敗',
+        details: error.message,
+        hint: '請檢查資料庫連接和表結構'
+      });
+    }
   }
 });
 
@@ -194,6 +214,12 @@ app.put('/api/users/:uid', async (req, res) => {
     const { uid } = req.params;
     const updates = req.body;
     
+    console.log(`🔄 更新用戶資料: ${uid}`, {
+      displayName: updates.displayName !== undefined,
+      avatar: updates.avatar !== undefined ? (updates.avatar ? '有值' : '空') : '未提供',
+      status: updates.status !== undefined ? (updates.status || '空') : '未提供'
+    });
+    
     // 構建更新語句
     const updateFields = [];
     const values = [];
@@ -211,13 +237,16 @@ app.put('/api/users/:uid', async (req, res) => {
       updateFields.push(`role = $${paramIndex++}`);
       values.push(updates.role);
     }
+    // avatar 和 status 需要明確處理，包括空字符串和 null
     if (updates.avatar !== undefined) {
       updateFields.push(`avatar = $${paramIndex++}`);
-      values.push(updates.avatar);
+      // 空字符串或 null 都設置為 null
+      values.push(updates.avatar && updates.avatar.trim() ? updates.avatar : null);
     }
     if (updates.status !== undefined) {
       updateFields.push(`status = $${paramIndex++}`);
-      values.push(updates.status);
+      // 空字符串或 null 都設置為 null
+      values.push(updates.status && updates.status.trim() ? updates.status : null);
     }
     if (updates.isActive !== undefined) {
       updateFields.push(`is_active = $${paramIndex++}`);
@@ -229,7 +258,18 @@ app.put('/api/users/:uid', async (req, res) => {
     }
     if (updates.lastSeen !== undefined) {
       updateFields.push(`last_seen = $${paramIndex++}`);
+      // 如果 lastSeen 為 null 或 undefined，設置為 null（清除時間戳）
       values.push(updates.lastSeen ? new Date(updates.lastSeen) : null);
+    }
+    
+    // 如果設置為在線，清除 last_seen（設為 null）
+    if (updates.isOnline === true && updates.lastSeen === undefined) {
+      // 檢查是否已經有 last_seen 字段的更新
+      const hasLastSeenUpdate = updateFields.some(f => f.includes('last_seen'));
+      if (!hasLastSeenUpdate) {
+        updateFields.push(`last_seen = $${paramIndex++}`);
+        values.push(null);
+      }
     }
     
     if (updateFields.length === 0) {
@@ -681,6 +721,44 @@ app.get('/api/diagnose', async (req, res) => {
           error: err.message
         };
       }
+    }
+    
+    // 檢查在線狀態功能
+    diagnostics.onlineStatus = {
+      hasColumns: false,
+      isOnlineColumn: false,
+      lastSeenColumn: false,
+      onlineUsersCount: 0,
+      error: null
+    };
+    
+    try {
+      // 檢查是否有 is_online 和 last_seen 字段
+      const columnsCheck = await pool.query(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'users' 
+          AND column_name IN ('is_online', 'last_seen')
+      `);
+      
+      const columnNames = columnsCheck.rows.map(r => r.column_name);
+      diagnostics.onlineStatus.isOnlineColumn = columnNames.includes('is_online');
+      diagnostics.onlineStatus.lastSeenColumn = columnNames.includes('last_seen');
+      diagnostics.onlineStatus.hasColumns = diagnostics.onlineStatus.isOnlineColumn && diagnostics.onlineStatus.lastSeenColumn;
+      
+      // 如果字段存在，統計在線用戶
+      if (diagnostics.onlineStatus.hasColumns) {
+        const onlineCheck = await pool.query(`
+          SELECT COUNT(*) as count 
+          FROM users 
+          WHERE is_online = true
+        `);
+        diagnostics.onlineStatus.onlineUsersCount = parseInt(onlineCheck.rows[0].count);
+      } else {
+        diagnostics.onlineStatus.error = '缺少 is_online 或 last_seen 字段，請執行資料庫遷移腳本';
+      }
+    } catch (err) {
+      diagnostics.onlineStatus.error = err.message;
     }
   } catch (error) {
     diagnostics.database.connected = false;
