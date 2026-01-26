@@ -611,22 +611,51 @@ app.get('/api/audit-logs', async (req, res) => {
     
     query += ' ORDER BY created_at DESC LIMIT 500';
     
-    const result = await pool.query(query, params);
-    const logs = result.rows.map(row => ({
-      id: row.id,
-      lead_id: row.lead_id,
-      actor_uid: row.actor_uid,
-      actor_name: row.actor_name,
-      action: row.action,
-      before: row.before ? JSON.parse(row.before) : null,
-      after: row.after ? JSON.parse(row.after) : null,
-      created_at: row.created_at
-    }));
+    console.log(`📥 獲取審計日誌: ${leadId ? `leadId=${leadId}` : '全部'}`);
     
+    const result = await pool.query(query, params);
+    
+    const logs = result.rows.map(row => {
+      // 安全地解析 JSONB 欄位
+      let before = null;
+      let after = null;
+      
+      try {
+        // 如果已經是對象，直接使用；如果是字符串，則解析
+        if (row.before) {
+          before = typeof row.before === 'string' ? JSON.parse(row.before) : row.before;
+        }
+        if (row.after) {
+          after = typeof row.after === 'string' ? JSON.parse(row.after) : row.after;
+        }
+      } catch (parseError) {
+        console.warn('解析審計日誌 JSON 失敗:', parseError);
+        // 如果解析失敗，保持為 null
+      }
+      
+      return {
+        id: row.id,
+        lead_id: row.lead_id,
+        actor_uid: row.actor_uid,
+        actor_name: row.actor_name,
+        action: row.action,
+        before: before,
+        after: after,
+        created_at: row.created_at ? new Date(row.created_at).toISOString() : null
+      };
+    });
+    
+    console.log(`✅ 獲取審計日誌成功: ${logs.length} 筆`);
     res.json(logs);
   } catch (error) {
-    console.error('獲取審計日誌失敗:', error);
-    res.status(500).json({ error: '獲取審計日誌失敗' });
+    console.error('❌ 獲取審計日誌失敗:', error);
+    console.error('錯誤詳情:', error.message);
+    console.error('錯誤堆疊:', error.stack);
+    res.status(500).json({ 
+      error: '獲取審計日誌失敗', 
+      details: error.message,
+      hint: '請檢查資料庫連接和 audit_logs 表結構'
+    });
   }
 });
 
