@@ -485,36 +485,100 @@ app.post('/api/leads', async (req, res) => {
 // 更新案件
 app.put('/api/leads/:id', async (req, res) => {
   try {
+    const { id } = req.params;
     const updates = req.body;
+    const now = new Date().toISOString();
+    
+    console.log(`📥 更新案件: ${id}`, Object.keys(updates));
+    
     const updateFields = [];
     const values = [];
     let paramIndex = 1;
     
-    Object.keys(updates).forEach(key => {
-      if (key === 'progress_updates' || key === 'change_history') {
-        updateFields.push(`${key} = $${paramIndex}`);
-        values.push(updates[key] ? JSON.stringify(updates[key]) : null);
-      } else if (key !== 'id') {
-        updateFields.push(`${key} = $${paramIndex}`);
-        values.push(updates[key]);
+    // 欄位名稱映射（前端 camelCase -> 資料庫 snake_case）
+    const fieldMapping = {
+      platform_id: 'platform_id',
+      budget_text: 'budget_text',
+      posted_at: 'posted_at',
+      internal_remarks: 'internal_remarks',
+      remarks_author: 'remarks_author',
+      decision_by: 'decision_by',
+      reject_reason: 'reject_reason',
+      review_note: 'review_note',
+      assigned_to: 'assigned_to',
+      assigned_to_name: 'assigned_to_name',
+      created_by: 'created_by',
+      created_by_name: 'created_by_name',
+      last_action_by: 'last_action_by',
+      contact_status: 'contact_status'
+    };
+    
+    // 處理每個更新欄位
+    for (const key in updates) {
+      if (key === 'id' || key === 'created_at' || key === 'created_by' || key === 'created_by_name') {
+        // 跳過這些欄位，不允許更新
+        continue;
       }
+      
+      let dbFieldName = fieldMapping[key] || key;
+      let value = updates[key];
+      
+      // 特殊處理 JSONB 欄位
+      if (key === 'progress_updates' || key === 'change_history' || key === 'links') {
+        updateFields.push(`${dbFieldName} = $${paramIndex}`);
+        values.push(value ? JSON.stringify(value) : null);
+        paramIndex++;
+        continue;
+      }
+      
+      // 特殊處理日期欄位
+      if (key === 'posted_at' || key === 'updated_at') {
+        updateFields.push(`${dbFieldName} = $${paramIndex}`);
+        values.push(value ? new Date(value) : null);
+        paramIndex++;
+        continue;
+      }
+      
+      // 一般欄位
+      updateFields.push(`${dbFieldName} = $${paramIndex}`);
+      values.push(value !== undefined && value !== null ? value : null);
       paramIndex++;
-    });
+    }
     
     if (updateFields.length === 0) {
       return res.status(400).json({ error: '沒有要更新的欄位' });
     }
     
-    values.push(req.params.id);
-    const result = await pool.query(
-      `UPDATE leads SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} RETURNING *`,
-      values
-    );
+    // 添加 updated_at
+    updateFields.push(`updated_at = $${paramIndex}`);
+    values.push(now);
+    paramIndex++;
     
-    res.json({ success: true });
+    // 添加 WHERE 條件的 ID
+    values.push(id);
+    
+    const query = `UPDATE leads SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    
+    console.log(`📝 執行 SQL:`, query.substring(0, 100) + '...');
+    console.log(`📊 參數數量: ${values.length - 1} 個欄位 + 1 個 ID`);
+    
+    const result = await pool.query(query, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: '案件不存在' });
+    }
+    
+    console.log(`✅ 案件更新成功: ${id}`);
+    res.json({ success: true, id: result.rows[0].id });
   } catch (error) {
-    console.error('更新案件失敗:', error);
-    res.status(500).json({ error: '更新案件失敗' });
+    console.error('❌ 更新案件失敗:', error);
+    console.error('錯誤詳情:', error.message);
+    console.error('錯誤堆疊:', error.stack);
+    res.status(500).json({ 
+      error: '更新案件失敗', 
+      details: error.message,
+      hint: '請檢查資料庫欄位名稱和資料類型是否正確'
+    });
   }
 });
 
