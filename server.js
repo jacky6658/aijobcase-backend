@@ -160,6 +160,11 @@ app.get('/api/users', async (req, res) => {
     const onlineCount = Object.values(users).filter(u => u.isOnline).length;
     console.log(`📊 獲取用戶列表: 總共 ${result.rows.length} 個用戶，${onlineCount} 個在線`);
     
+    // 調試：檢查每個用戶的資料
+    Object.values(users).forEach(u => {
+      console.log(`  - ${u.displayName}: 在線=${u.isOnline}, 頭貼=${u.avatar ? `有(${Math.round(u.avatar.length / 1024)}KB)` : '無'}, 狀態=${u.status || '無'}`);
+    });
+    
     res.json(users);
   } catch (error) {
     console.error('獲取使用者失敗:', error);
@@ -179,6 +184,58 @@ app.get('/api/users', async (req, res) => {
         hint: '請檢查資料庫連接和表結構'
       });
     }
+  }
+});
+
+// 創建使用者
+app.post('/api/users', async (req, res) => {
+  try {
+    const { uid, email, displayName, role, avatar, status, password } = req.body;
+    
+    if (!uid || !email || !displayName) {
+      return res.status(400).json({ error: '缺少必要欄位：uid, email, displayName' });
+    }
+
+    const now = new Date().toISOString();
+    const result = await pool.query(
+      `INSERT INTO users (id, email, display_name, role, avatar, status, created_at, is_active, is_online)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (id) DO UPDATE SET
+         email = EXCLUDED.email,
+         display_name = EXCLUDED.display_name,
+         role = EXCLUDED.role,
+         avatar = EXCLUDED.avatar,
+         status = EXCLUDED.status
+       RETURNING *`,
+      [
+        uid,
+        email,
+        displayName,
+        role || 'REVIEWER',
+        avatar || null,
+        status || null,
+        now,
+        true, // is_active
+        false // is_online
+      ]
+    );
+
+    const row = result.rows[0];
+    res.json({
+      uid: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      role: row.role,
+      avatar: row.avatar,
+      status: row.status,
+      createdAt: row.created_at,
+      isActive: row.is_active !== false,
+      isOnline: row.is_online || false,
+      lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null
+    });
+  } catch (error) {
+    console.error('創建使用者失敗:', error);
+    res.status(500).json({ error: '創建使用者失敗', details: error.message });
   }
 });
 
@@ -558,10 +615,17 @@ app.post('/api/migrate', async (req, res) => {
       const userList = Object.values(users);
       for (const user of userList) {
         try {
+          // 使用 ON CONFLICT DO UPDATE 來更新現有用戶的資料（包括頭貼和狀態）
           await pool.query(
-            `INSERT INTO users (id, email, display_name, role, avatar, status, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (id) DO NOTHING`,
+            `INSERT INTO users (id, email, display_name, role, avatar, status, created_at, is_active, is_online)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (id) DO UPDATE SET
+               email = EXCLUDED.email,
+               display_name = EXCLUDED.display_name,
+               role = EXCLUDED.role,
+               avatar = COALESCE(EXCLUDED.avatar, users.avatar),  -- 如果新值為空，保留舊值
+               status = COALESCE(EXCLUDED.status, users.status),  -- 如果新值為空，保留舊值
+               is_active = COALESCE(EXCLUDED.is_active, users.is_active, true)`,
             [
               user.uid || user.id,
               user.email || '',
@@ -569,7 +633,9 @@ app.post('/api/migrate', async (req, res) => {
               user.role || 'REVIEWER',
               user.avatar || null,
               user.status || null,
-              user.createdAt || user.created_at || new Date().toISOString()
+              user.createdAt || user.created_at || new Date().toISOString(),
+              user.isActive !== false, // is_active
+              false // is_online，遷移時設為離線
             ]
           );
           results.users.inserted++;
