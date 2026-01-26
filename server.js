@@ -14,7 +14,9 @@ const port = process.env.PORT || 3001;
 
 // 中間件
 app.use(cors());
-app.use(express.json());
+// 增加請求體大小限制到 50MB（用於遷移大量資料，包含 base64 圖片）
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // PostgreSQL 連接池配置函數
 const getDbConfig = () => {
@@ -143,7 +145,9 @@ app.get('/api/users', async (req, res) => {
         avatar: row.avatar,
         status: row.status,
         createdAt: row.created_at,
-        isActive: true // 預設為啟用
+        isActive: row.is_active !== false, // 預設為啟用
+        isOnline: row.is_online || false, // 在線狀態
+        lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null // 最後上線時間
       };
     });
     res.json(users);
@@ -173,11 +177,90 @@ app.get('/api/users/:uid', async (req, res) => {
       role: row.role,
       avatar: row.avatar,
       status: row.status,
-      createdAt: row.created_at
+      createdAt: row.created_at,
+      isActive: row.is_active !== false,
+      isOnline: row.is_online || false,
+      lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null
     });
   } catch (error) {
     console.error('獲取使用者失敗:', error);
     res.status(500).json({ error: '獲取使用者失敗' });
+  }
+});
+
+// 更新使用者資料
+app.put('/api/users/:uid', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const updates = req.body;
+    
+    // 構建更新語句
+    const updateFields = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    if (updates.displayName !== undefined) {
+      updateFields.push(`display_name = $${paramIndex++}`);
+      values.push(updates.displayName);
+    }
+    if (updates.email !== undefined) {
+      updateFields.push(`email = $${paramIndex++}`);
+      values.push(updates.email);
+    }
+    if (updates.role !== undefined) {
+      updateFields.push(`role = $${paramIndex++}`);
+      values.push(updates.role);
+    }
+    if (updates.avatar !== undefined) {
+      updateFields.push(`avatar = $${paramIndex++}`);
+      values.push(updates.avatar);
+    }
+    if (updates.status !== undefined) {
+      updateFields.push(`status = $${paramIndex++}`);
+      values.push(updates.status);
+    }
+    if (updates.isActive !== undefined) {
+      updateFields.push(`is_active = $${paramIndex++}`);
+      values.push(updates.isActive);
+    }
+    if (updates.isOnline !== undefined) {
+      updateFields.push(`is_online = $${paramIndex++}`);
+      values.push(updates.isOnline);
+    }
+    if (updates.lastSeen !== undefined) {
+      updateFields.push(`last_seen = $${paramIndex++}`);
+      values.push(updates.lastSeen ? new Date(updates.lastSeen) : null);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ error: '沒有提供更新字段' });
+    }
+    
+    values.push(uid);
+    const query = `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    
+    const result = await pool.query(query, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: '使用者不存在' });
+    }
+    
+    const row = result.rows[0];
+    res.json({
+      uid: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      role: row.role,
+      avatar: row.avatar,
+      status: row.status,
+      createdAt: row.created_at,
+      isActive: row.is_active !== false,
+      isOnline: row.is_online || false,
+      lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null
+    });
+  } catch (error) {
+    console.error('更新使用者失敗:', error);
+    res.status(500).json({ error: '更新使用者失敗', details: error.message });
   }
 });
 
