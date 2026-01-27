@@ -546,11 +546,11 @@ app.post('/api/leads', async (req, res) => {
       lead.need.trim(), // 確保去除前後空格
       lead.budget_text || null,
       lead.posted_at ? new Date(lead.posted_at) : null,
-      lead.phone || null,
-      lead.email || null,
-      lead.location || null,
-      lead.estimated_duration || null,
-      lead.contact_method || null,
+      (lead.phone && lead.phone.trim()) || null,
+      (lead.email && lead.email.trim()) || null,
+      (lead.location && lead.location.trim()) || null,
+      (lead.estimated_duration && lead.estimated_duration.trim()) || null,
+      (lead.contact_method && lead.contact_method.trim()) || null,
       lead.note || null,
       lead.internal_remarks || null,
       lead.remarks_author || null,
@@ -670,9 +670,17 @@ app.put('/api/leads/:id', async (req, res) => {
         continue;
       }
       
-      // 一般欄位
+      // 一般欄位：對於字符串欄位，如果為空字符串則轉為 null
       updateFields.push(`${dbFieldName} = $${paramIndex}`);
-      values.push(value !== undefined && value !== null ? value : null);
+      if (value === undefined || value === null) {
+        values.push(null);
+      } else if (typeof value === 'string') {
+        // 字符串欄位：trim 後如果為空則設為 null
+        const trimmed = value.trim();
+        values.push(trimmed === '' ? null : trimmed);
+      } else {
+        values.push(value);
+      }
       paramIndex++;
     }
     
