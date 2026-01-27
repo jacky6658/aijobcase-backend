@@ -476,6 +476,8 @@ app.get('/api/leads', async (req, res) => {
         phone: row.phone || null,
         email: row.email || null,
         location: row.location || null,
+        estimated_duration: row.estimated_duration || null,
+        contact_method: row.contact_method || null,
         note: row.note || null,
         internal_remarks: row.internal_remarks || null,
         remarks_author: row.remarks_author || null,
@@ -530,11 +532,11 @@ app.post('/api/leads', async (req, res) => {
     const result = await pool.query(`
       INSERT INTO leads (
         id, case_code, platform, platform_id, need, budget_text, posted_at,
-        phone, email, location, note, internal_remarks, remarks_author,
+        phone, email, location, estimated_duration, contact_method, note, internal_remarks, remarks_author,
         status, decision, priority, created_by, created_by_name,
         created_at, updated_at, progress_updates, change_history, contact_status,
         cost_records, profit_records, contracts
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
       RETURNING *
     `, [
       lead.id,
@@ -547,6 +549,8 @@ app.post('/api/leads', async (req, res) => {
       lead.phone || null,
       lead.email || null,
       lead.location || null,
+      lead.estimated_duration || null,
+      lead.contact_method || null,
       lead.note || null,
       lead.internal_remarks || null,
       lead.remarks_author || null,
@@ -617,6 +621,11 @@ app.put('/api/leads/:id', async (req, res) => {
       platform_id: 'platform_id',
       budget_text: 'budget_text',
       posted_at: 'posted_at',
+      phone: 'phone',
+      email: 'email',
+      location: 'location',
+      estimated_duration: 'estimated_duration',
+      contact_method: 'contact_method',
       internal_remarks: 'internal_remarks',
       remarks_author: 'remarks_author',
       decision_by: 'decision_by',
@@ -865,13 +874,13 @@ app.post('/api/migrate', async (req, res) => {
           await pool.query(
             `INSERT INTO leads (
               id, case_code, platform, platform_id, need, budget_text, posted_at,
-              phone, email, location, note, internal_remarks, remarks_author,
+              phone, email, location, estimated_duration, contact_method, note, internal_remarks, remarks_author,
               status, decision, decision_by, reject_reason, review_note,
               assigned_to, assigned_to_name, priority, created_by, created_by_name,
               created_at, updated_at, last_action_by, progress_updates, change_history
             ) VALUES (
               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-              $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+              $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
             ) ON CONFLICT (id) DO NOTHING`,
             [
               lead.id,
@@ -884,6 +893,8 @@ app.post('/api/migrate', async (req, res) => {
               lead.phone || null,
               lead.email || null,
               lead.location || null,
+              lead.estimated_duration || null,
+              lead.contact_method || null,
               lead.note || null,
               lead.internal_remarks || null,
               lead.remarks_author || null,
