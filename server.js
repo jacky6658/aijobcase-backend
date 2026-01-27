@@ -160,9 +160,10 @@ app.get('/api/users', async (req, res) => {
     const onlineCount = Object.values(users).filter(u => u.isOnline).length;
     console.log(`📊 獲取用戶列表: 總共 ${result.rows.length} 個用戶，${onlineCount} 個在線`);
     
-    // 調試：檢查每個用戶的資料
-    Object.values(users).forEach(u => {
-      console.log(`  - ${u.displayName}: 在線=${u.isOnline}, 頭貼=${u.avatar ? `有(${Math.round(u.avatar.length / 1024)}KB)` : '無'}, 狀態=${u.status || '無'}`);
+    // 調試：檢查每個用戶的資料（包括資料庫原始值）
+    result.rows.forEach(row => {
+      const user = users[row.id];
+      console.log(`  - ${user.displayName}: 在線=${user.isOnline} (資料庫: ${row.is_online}), 頭貼=${user.avatar ? `有(${Math.round(user.avatar.length / 1024)}KB)` : '無'}, 狀態=${user.status || '無'}, last_seen=${row.last_seen || 'null'}`);
     });
     
     res.json(users);
@@ -274,7 +275,9 @@ app.put('/api/users/:uid', async (req, res) => {
     console.log(`🔄 更新用戶資料: ${uid}`, {
       displayName: updates.displayName !== undefined,
       avatar: updates.avatar !== undefined ? (updates.avatar ? '有值' : '空') : '未提供',
-      status: updates.status !== undefined ? (updates.status || '空') : '未提供'
+      status: updates.status !== undefined ? (updates.status || '空') : '未提供',
+      isOnline: updates.isOnline !== undefined ? (updates.isOnline ? '在線' : '離線') : '未提供',
+      lastSeen: updates.lastSeen !== undefined ? (updates.lastSeen || 'null') : '未提供'
     });
     
     // 構建更新語句
@@ -336,6 +339,9 @@ app.put('/api/users/:uid', async (req, res) => {
     values.push(uid);
     const query = `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
     
+    console.log(`📝 執行 SQL: UPDATE users SET ... WHERE id = ${uid}`);
+    console.log(`📊 更新欄位:`, updateFields);
+    
     const result = await pool.query(query, values);
     
     if (result.rows.length === 0) {
@@ -343,6 +349,14 @@ app.put('/api/users/:uid', async (req, res) => {
     }
     
     const row = result.rows[0];
+    console.log(`✅ 使用者 ${uid} 更新成功:`, {
+      displayName: row.display_name,
+      isOnline: row.is_online,
+      lastSeen: row.last_seen,
+      avatar: row.avatar ? '有頭貼' : '無頭貼',
+      status: row.status || '無狀態'
+    });
+    
     res.json({
       uid: row.id,
       email: row.email,
@@ -378,9 +392,18 @@ app.get('/api/leads', async (req, res) => {
           progress_updates = typeof row.progress_updates === 'string' 
             ? JSON.parse(row.progress_updates) 
             : row.progress_updates;
+          // 確保 progress_updates 是陣列
+          if (!Array.isArray(progress_updates)) {
+            console.warn('progress_updates 不是陣列，轉換為陣列');
+            progress_updates = [];
+          }
+          console.log(`📊 案件 ${row.id} 的進度更新: ${progress_updates.length} 筆`);
+        } else {
+          progress_updates = [];
         }
       } catch (e) {
         console.warn('解析 progress_updates 失敗:', e);
+        progress_updates = [];
       }
       
       try {
@@ -395,6 +418,7 @@ app.get('/api/leads', async (req, res) => {
 
       return {
         id: row.id,
+        case_code: row.case_code || null,
         platform: row.platform,
         platform_id: row.platform_id || '',
         need: row.need || '',
@@ -445,14 +469,15 @@ app.post('/api/leads', async (req, res) => {
     
     const result = await pool.query(`
       INSERT INTO leads (
-        id, platform, platform_id, need, budget_text, posted_at,
+        id, case_code, platform, platform_id, need, budget_text, posted_at,
         phone, email, location, note, internal_remarks, remarks_author,
         status, decision, priority, created_by, created_by_name,
         created_at, updated_at, progress_updates, change_history
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
       RETURNING *
     `, [
       lead.id,
+      lead.case_code || null,
       lead.platform || 'FB',
       lead.platform_id || '',
       lead.need || '',
@@ -497,6 +522,7 @@ app.put('/api/leads/:id', async (req, res) => {
     
     // 欄位名稱映射（前端 camelCase -> 資料庫 snake_case）
     const fieldMapping = {
+      case_code: 'case_code',
       platform_id: 'platform_id',
       budget_text: 'budget_text',
       posted_at: 'posted_at',
@@ -662,7 +688,7 @@ app.get('/api/audit-logs', async (req, res) => {
 // 根路徑 - API 資訊
 app.get('/', (req, res) => {
   res.json({
-    name: 'CaseFlow CRM API',
+    name: 'AI案件管理系統 API',
     version: '1.0.0',
     status: 'running',
     endpoints: {
@@ -746,17 +772,18 @@ app.post('/api/migrate', async (req, res) => {
         try {
           await pool.query(
             `INSERT INTO leads (
-              id, platform, platform_id, need, budget_text, posted_at,
+              id, case_code, platform, platform_id, need, budget_text, posted_at,
               phone, email, location, note, internal_remarks, remarks_author,
               status, decision, decision_by, reject_reason, review_note,
               assigned_to, assigned_to_name, priority, created_by, created_by_name,
               created_at, updated_at, last_action_by, progress_updates, change_history
             ) VALUES (
               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-              $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27
+              $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
             ) ON CONFLICT (id) DO NOTHING`,
             [
               lead.id,
+              lead.case_code || null,
               lead.platform || 'FB',
               lead.platform_id || null,
               lead.need || '',
