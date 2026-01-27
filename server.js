@@ -657,7 +657,33 @@ app.put('/api/leads/:id', async (req, res) => {
       if (key === 'progress_updates' || key === 'change_history' || key === 'links' || 
           key === 'cost_records' || key === 'profit_records' || key === 'contracts') {
         updateFields.push(`${dbFieldName} = $${paramIndex}`);
-        values.push(value ? JSON.stringify(value) : null);
+        
+        // 確保值是有效的 JSON 陣列
+        if (value === null || value === undefined) {
+          values.push(null);
+        } else if (Array.isArray(value)) {
+          values.push(JSON.stringify(value));
+          console.log(`📊 更新 ${key}: ${value.length} 筆記錄`);
+        } else if (typeof value === 'string') {
+          // 如果已經是字符串，嘗試解析驗證
+          try {
+            const parsed = JSON.parse(value);
+            if (Array.isArray(parsed)) {
+              values.push(value);
+              console.log(`📊 更新 ${key}: ${parsed.length} 筆記錄（字符串格式）`);
+            } else {
+              console.warn(`⚠️ ${key} 不是陣列格式，設為 null`);
+              values.push(null);
+            }
+          } catch (e) {
+            console.warn(`⚠️ ${key} JSON 解析失敗，設為 null:`, e);
+            values.push(null);
+          }
+        } else {
+          console.warn(`⚠️ ${key} 格式不正確，設為 null`);
+          values.push(null);
+        }
+        
         paramIndex++;
         continue;
       }
@@ -706,7 +732,43 @@ app.put('/api/leads/:id', async (req, res) => {
     }
     
     console.log(`✅ 案件更新成功: ${id}`);
-    res.json({ success: true, id: result.rows[0].id });
+    
+    // 返回更新後的完整數據，特別是 cost_records 和 profit_records
+    const updatedRow = result.rows[0];
+    
+    // 解析 JSONB 欄位
+    let cost_records = [];
+    try {
+      if (updatedRow.cost_records) {
+        cost_records = typeof updatedRow.cost_records === 'string'
+          ? JSON.parse(updatedRow.cost_records)
+          : updatedRow.cost_records;
+        if (!Array.isArray(cost_records)) cost_records = [];
+      }
+    } catch (e) {
+      console.warn('解析 cost_records 失敗:', e);
+    }
+    
+    let profit_records = [];
+    try {
+      if (updatedRow.profit_records) {
+        profit_records = typeof updatedRow.profit_records === 'string'
+          ? JSON.parse(updatedRow.profit_records)
+          : updatedRow.profit_records;
+        if (!Array.isArray(profit_records)) profit_records = [];
+      }
+    } catch (e) {
+      console.warn('解析 profit_records 失敗:', e);
+    }
+    
+    // 返回更新後的數據，包括 cost_records 和 profit_records
+    res.json({ 
+      success: true, 
+      id: updatedRow.id,
+      cost_records: cost_records,
+      profit_records: profit_records,
+      status: updatedRow.status
+    });
   } catch (error) {
     console.error('❌ 更新案件失敗:', error);
     console.error('錯誤詳情:', error.message);
