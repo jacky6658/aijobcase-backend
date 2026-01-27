@@ -426,6 +426,45 @@ app.get('/api/leads', async (req, res) => {
         console.warn('解析 change_history 失敗:', e);
       }
 
+      // 處理成本記錄
+      let cost_records = [];
+      try {
+        if (row.cost_records) {
+          cost_records = typeof row.cost_records === 'string'
+            ? JSON.parse(row.cost_records)
+            : row.cost_records;
+          if (!Array.isArray(cost_records)) cost_records = [];
+        }
+      } catch (e) {
+        console.warn('解析 cost_records 失敗:', e);
+      }
+
+      // 處理利潤記錄
+      let profit_records = [];
+      try {
+        if (row.profit_records) {
+          profit_records = typeof row.profit_records === 'string'
+            ? JSON.parse(row.profit_records)
+            : row.profit_records;
+          if (!Array.isArray(profit_records)) profit_records = [];
+        }
+      } catch (e) {
+        console.warn('解析 profit_records 失敗:', e);
+      }
+
+      // 處理合約文件
+      let contracts = [];
+      try {
+        if (row.contracts) {
+          contracts = typeof row.contracts === 'string'
+            ? JSON.parse(row.contracts)
+            : row.contracts;
+          if (!Array.isArray(contracts)) contracts = [];
+        }
+      } catch (e) {
+        console.warn('解析 contracts 失敗:', e);
+      }
+
       return {
         id: row.id,
         case_code: row.case_code || null,
@@ -455,8 +494,11 @@ app.get('/api/leads', async (req, res) => {
         last_action_by: row.last_action_by || null,
         progress_updates: progress_updates,
         change_history: change_history,
-        links: [], // 如果需要，可以從其他表讀取
-        contact_status: '未回覆' // 預設值
+        cost_records: cost_records, // 新增
+        profit_records: profit_records, // 新增
+        contracts: contracts, // 新增
+        links: row.links ? (typeof row.links === 'string' ? JSON.parse(row.links) : row.links) : [], // 從資料庫讀取
+        contact_status: row.contact_status || '未回覆' // 從資料庫讀取
       };
     });
     res.json(leads);
@@ -477,22 +519,31 @@ app.post('/api/leads', async (req, res) => {
     const lead = req.body;
     const now = new Date().toISOString();
     
+    // 確保必填欄位不為空
+    if (!lead.need || lead.need.trim() === '') {
+      return res.status(400).json({ error: '客戶原始需求不能為空' });
+    }
+    if (!lead.created_by_name || lead.created_by_name.trim() === '') {
+      return res.status(400).json({ error: '創建者名稱不能為空' });
+    }
+
     const result = await pool.query(`
       INSERT INTO leads (
         id, case_code, platform, platform_id, need, budget_text, posted_at,
         phone, email, location, note, internal_remarks, remarks_author,
         status, decision, priority, created_by, created_by_name,
-        created_at, updated_at, progress_updates, change_history
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+        created_at, updated_at, progress_updates, change_history, contact_status,
+        cost_records, profit_records, contracts
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
       RETURNING *
     `, [
       lead.id,
       lead.case_code || null,
       lead.platform || 'FB',
       lead.platform_id || '',
-      lead.need || '',
+      lead.need.trim(), // 確保去除前後空格
       lead.budget_text || null,
-      lead.posted_at || null,
+      lead.posted_at ? new Date(lead.posted_at) : null,
       lead.phone || null,
       lead.email || null,
       lead.location || null,
@@ -503,17 +554,47 @@ app.post('/api/leads', async (req, res) => {
       lead.decision || 'pending',
       lead.priority || 3,
       lead.created_by || null,
-      lead.created_by_name || '',
-      lead.created_at || now,
-      lead.updated_at || now,
+      lead.created_by_name.trim(), // 確保去除前後空格
+      lead.created_at ? new Date(lead.created_at) : now,
+      lead.updated_at ? new Date(lead.updated_at) : now,
       lead.progress_updates ? JSON.stringify(lead.progress_updates) : null,
-      lead.change_history ? JSON.stringify(lead.change_history) : null
+      lead.change_history ? JSON.stringify(lead.change_history) : null,
+      lead.contact_status || '未回覆', // 添加 contact_status
+      lead.cost_records ? JSON.stringify(lead.cost_records) : null, // 添加 cost_records
+      lead.profit_records ? JSON.stringify(lead.profit_records) : null, // 添加 profit_records
+      lead.contracts ? JSON.stringify(lead.contracts) : null // 添加 contracts
     ]);
     
     res.json({ id: result.rows[0].id });
   } catch (error) {
-    console.error('創建案件失敗:', error);
-    res.status(500).json({ error: '創建案件失敗' });
+    console.error('❌ 創建案件失敗:', error);
+    console.error('錯誤詳情:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      constraint: error.constraint,
+      table: error.table,
+      column: error.column,
+      stack: error.stack
+    });
+    console.error('接收到的資料:', {
+      id: lead.id,
+      case_code: lead.case_code,
+      platform: lead.platform,
+      platform_id: lead.platform_id,
+      need: lead.need ? lead.need.substring(0, 50) + '...' : null,
+      has_progress_updates: !!lead.progress_updates,
+      has_change_history: !!lead.change_history,
+      has_cost_records: !!lead.cost_records,
+      has_profit_records: !!lead.profit_records,
+      has_contracts: !!lead.contracts
+    });
+    res.status(500).json({ 
+      error: '創建案件失敗',
+      details: error.message,
+      code: error.code,
+      hint: error.constraint ? `資料庫約束錯誤: ${error.constraint}` : '請檢查資料庫連接和表結構'
+    });
   }
 });
 
@@ -564,7 +645,8 @@ app.put('/api/leads/:id', async (req, res) => {
       let value = updates[key];
       
       // 特殊處理 JSONB 欄位
-      if (key === 'progress_updates' || key === 'change_history' || key === 'links') {
+      if (key === 'progress_updates' || key === 'change_history' || key === 'links' || 
+          key === 'cost_records' || key === 'profit_records' || key === 'contracts') {
         updateFields.push(`${dbFieldName} = $${paramIndex}`);
         values.push(value ? JSON.stringify(value) : null);
         paramIndex++;
