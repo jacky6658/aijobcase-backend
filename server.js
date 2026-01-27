@@ -12,8 +12,18 @@ const { Pool } = require('pg');
 const app = express();
 const port = process.env.PORT || 3001;
 
-// 中間件
-app.use(cors());
+// 中間件 - CORS 配置（支援 Safari 和所有瀏覽器）
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*', // 允許所有來源，或指定特定來源
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: false, // Safari 需要明確設置
+  optionsSuccessStatus: 200 // 支援舊版瀏覽器
+}));
+
+// 處理 OPTIONS 預檢請求（Safari 需要）
+app.options('*', cors());
+
 // 增加請求體大小限制到 50MB（用於遷移大量資料，包含 base64 圖片）
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
