@@ -881,6 +881,8 @@ app.get('/', (req, res) => {
       ai: {
         import: 'POST /api/ai/import - AI 助理匯入案件',
         query: 'GET /api/ai/leads - AI 助理查詢案件',
+        update: 'PUT /api/ai/update - AI 助理修改案件',
+        delete: 'DELETE /api/ai/delete - AI 助理刪除案件',
         progress: 'POST /api/ai/progress - AI 助理新增進度更新',
         cost: 'POST /api/ai/cost - AI 助理匯入成本',
         profit: 'POST /api/ai/profit - AI 助理匯入利潤',
@@ -1062,6 +1064,168 @@ app.get('/api/ai/leads', async (req, res) => {
   } catch (error) {
     console.error('❌ AI 查詢失敗:', error);
     res.status(500).json({ error: '查詢失敗', details: error.message });
+  }
+});
+
+/**
+ * AI 助理修改案件端點
+ * PUT /api/ai/update
+ * 
+ * 請求格式：
+ * {
+ *   "case_code": "aijob-001" 或 "lead_id": "xxx",
+ *   "updates": {
+ *     "status": "已接洽",
+ *     "note": "新備註",
+ *     "budget_text": "5萬",
+ *     ... 任何要更新的欄位
+ *   }
+ * }
+ */
+app.put('/api/ai/update', async (req, res) => {
+  try {
+    const { lead_id, case_code, updates } = req.body;
+    
+    if (!lead_id && !case_code) {
+      return res.status(400).json({ 
+        error: '請提供 lead_id 或 case_code',
+        example: {
+          case_code: "aijob-001",
+          updates: { status: "已接洽", note: "新備註" }
+        }
+      });
+    }
+
+    if (!updates || Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: '請提供要更新的欄位 (updates)' });
+    }
+
+    // 找到案件
+    let leadResult;
+    if (lead_id) {
+      leadResult = await pool.query('SELECT * FROM leads WHERE id = $1', [lead_id]);
+    } else if (case_code) {
+      leadResult = await pool.query('SELECT * FROM leads WHERE case_code = $1', [case_code]);
+    }
+
+    if (!leadResult || leadResult.rows.length === 0) {
+      return res.status(404).json({ error: '案件不存在' });
+    }
+
+    const lead = leadResult.rows[0];
+    const leadId = lead.id;
+
+    // 建構更新語句
+    const updateFields = [];
+    const values = [];
+    let paramIndex = 1;
+
+    // 欄位映射（前端欄位 -> 資料庫欄位）
+    const fieldMapping = {
+      contact_status: 'contact_status',
+      platform: 'platform',
+      platform_id: 'platform_id',
+      need: 'need',
+      budget_text: 'budget_text',
+      note: 'note',
+      phone: 'phone',
+      email: 'email',
+      location: 'location',
+      status: 'status',
+      decision: 'decision',
+      priority: 'priority',
+      assigned_to: 'assigned_to',
+      internal_remarks: 'internal_remarks',
+      estimated_duration: 'estimated_duration',
+      contact_method: 'contact_method'
+    };
+
+    for (const [key, value] of Object.entries(updates)) {
+      const dbField = fieldMapping[key] || key;
+      updateFields.push(`${dbField} = $${paramIndex++}`);
+      values.push(value);
+    }
+
+    // 加上 updated_at
+    const now = new Date().toISOString();
+    updateFields.push(`updated_at = $${paramIndex++}`);
+    values.push(now);
+
+    // 加上 lead_id
+    values.push(leadId);
+
+    const query = `UPDATE leads SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`;
+    const result = await pool.query(query, values);
+
+    console.log(`✅ AI 助理修改案件: ${case_code || leadId}`);
+
+    res.json({
+      message: '案件更新成功',
+      case_code: result.rows[0].case_code,
+      updated_fields: Object.keys(updates)
+    });
+
+  } catch (error) {
+    console.error('❌ AI 修改案件端點錯誤:', error);
+    res.status(500).json({ 
+      error: 'AI 修改案件失敗',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * AI 助理刪除案件端點
+ * DELETE /api/ai/delete
+ * 
+ * 請求格式：
+ * {
+ *   "case_code": "aijob-001" 或 "lead_id": "xxx"
+ * }
+ */
+app.delete('/api/ai/delete', async (req, res) => {
+  try {
+    const { lead_id, case_code } = req.body;
+    
+    if (!lead_id && !case_code) {
+      return res.status(400).json({ 
+        error: '請提供 lead_id 或 case_code',
+        example: { case_code: "aijob-001" }
+      });
+    }
+
+    // 找到案件
+    let leadResult;
+    if (lead_id) {
+      leadResult = await pool.query('SELECT id, case_code FROM leads WHERE id = $1', [lead_id]);
+    } else if (case_code) {
+      leadResult = await pool.query('SELECT id, case_code FROM leads WHERE case_code = $1', [case_code]);
+    }
+
+    if (!leadResult || leadResult.rows.length === 0) {
+      return res.status(404).json({ error: '案件不存在' });
+    }
+
+    const lead = leadResult.rows[0];
+    const leadId = lead.id;
+    const deletedCaseCode = lead.case_code;
+
+    // 刪除案件
+    await pool.query('DELETE FROM leads WHERE id = $1', [leadId]);
+
+    console.log(`✅ AI 助理刪除案件: ${deletedCaseCode}`);
+
+    res.json({
+      message: '案件刪除成功',
+      deleted_case_code: deletedCaseCode
+    });
+
+  } catch (error) {
+    console.error('❌ AI 刪除案件端點錯誤:', error);
+    res.status(500).json({ 
+      error: 'AI 刪除案件失敗',
+      details: error.message
+    });
   }
 });
 
