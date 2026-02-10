@@ -877,6 +877,10 @@ app.get('/', (req, res) => {
       auditLogs: {
         getAll: 'GET /api/audit-logs',
         getByLead: 'GET /api/audit-logs?leadId=xxx'
+      },
+      ai: {
+        import: 'POST /api/ai/import - AI 助理匯入案件',
+        query: 'GET /api/ai/leads - AI 助理查詢案件'
       }
     },
     database: {
@@ -885,6 +889,176 @@ app.get('/', (req, res) => {
       connected: '檢查 /health 端點'
     }
   });
+});
+
+// ==================== AI 助理專用 API ====================
+
+/**
+ * AI 助理匯入案件端點
+ * POST /api/ai/import
+ * 
+ * 接受簡化格式，自動填充預設值
+ * 
+ * 請求格式（單筆）：
+ * {
+ *   "need": "案件需求描述",
+ *   "platform": "FB" | "Threads" | "PRO360" | "其他",
+ *   "platform_id": "客戶ID或名稱",
+ *   "budget_text": "預算描述",
+ *   "phone": "電話（可選）",
+ *   "email": "Email（可選）",
+ *   "location": "地點（可選）",
+ *   "note": "備註（可選）",
+ *   "links": ["相關連結"]（可選）
+ * }
+ * 
+ * 或批量：
+ * {
+ *   "leads": [{ ... }, { ... }]
+ * }
+ */
+app.post('/api/ai/import', async (req, res) => {
+  try {
+    const { leads, ...singleLead } = req.body;
+    
+    // 判斷是單筆還是批量
+    const leadsToImport = leads && Array.isArray(leads) ? leads : [singleLead];
+    
+    if (leadsToImport.length === 0 || !leadsToImport[0].need) {
+      return res.status(400).json({ 
+        error: '請提供案件資料',
+        example: {
+          need: "案件需求描述",
+          platform: "FB",
+          platform_id: "客戶名稱",
+          budget_text: "預算 5000-10000"
+        }
+      });
+    }
+
+    const results = {
+      success: [],
+      errors: []
+    };
+
+    for (const lead of leadsToImport) {
+      try {
+        const id = `lead_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = new Date().toISOString();
+        
+        // 自動生成案件編號
+        const countResult = await pool.query('SELECT COUNT(*) FROM leads');
+        const count = parseInt(countResult.rows[0].count) + 1;
+        const case_code = `aijob-${String(count).padStart(3, '0')}`;
+
+        const result = await pool.query(
+          `INSERT INTO leads (
+            id, case_code, contact_status, platform, platform_id, need, budget_text,
+            posted_at, note, links, phone, email, location,
+            status, decision, priority,
+            created_by, created_by_name, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          RETURNING *`,
+          [
+            id,
+            case_code,
+            lead.contact_status || '未回覆',
+            lead.platform || '其他',
+            lead.platform_id || '未知',
+            lead.need,
+            lead.budget_text || '待確認',
+            lead.posted_at || now,
+            lead.note || '',
+            JSON.stringify(lead.links || []),
+            lead.phone || null,
+            lead.email || null,
+            lead.location || null,
+            lead.status || '待匯入',
+            lead.decision || 'pending',
+            lead.priority || 3,
+            'ai-assistant',
+            'AI 助理 (YuQi)',
+            now,
+            now
+          ]
+        );
+
+        results.success.push({
+          id: result.rows[0].id,
+          case_code: result.rows[0].case_code,
+          need: result.rows[0].need
+        });
+
+        console.log(`✅ AI 助理匯入案件: ${case_code} - ${lead.need.substring(0, 30)}...`);
+
+      } catch (err) {
+        console.error(`❌ AI 助理匯入失敗:`, err.message);
+        results.errors.push({
+          need: lead.need?.substring(0, 50),
+          error: err.message
+        });
+      }
+    }
+
+    res.json({
+      message: `成功匯入 ${results.success.length} 筆案件`,
+      imported: results.success.length,
+      failed: results.errors.length,
+      results
+    });
+
+  } catch (error) {
+    console.error('❌ AI 匯入端點錯誤:', error);
+    res.status(500).json({ 
+      error: 'AI 匯入失敗',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * AI 助理查詢案件端點
+ * GET /api/ai/leads
+ * 
+ * 查詢參數：
+ * - status: 案件狀態
+ * - limit: 筆數限制（預設 20）
+ */
+app.get('/api/ai/leads', async (req, res) => {
+  try {
+    const { status, limit = 20 } = req.query;
+    
+    let query = 'SELECT id, case_code, need, platform, platform_id, budget_text, status, contact_status, created_at FROM leads';
+    const params = [];
+    
+    if (status) {
+      query += ' WHERE status = $1';
+      params.push(status);
+    }
+    
+    query += ` ORDER BY created_at DESC LIMIT ${parseInt(limit)}`;
+    
+    const result = await pool.query(query, params);
+    
+    res.json({
+      count: result.rows.length,
+      leads: result.rows.map(row => ({
+        id: row.id,
+        case_code: row.case_code,
+        need: row.need,
+        platform: row.platform,
+        platform_id: row.platform_id,
+        budget: row.budget_text,
+        status: row.status,
+        contact_status: row.contact_status,
+        created_at: row.created_at
+      }))
+    });
+
+  } catch (error) {
+    console.error('❌ AI 查詢失敗:', error);
+    res.status(500).json({ error: '查詢失敗', details: error.message });
+  }
 });
 
 // 自動遷移端點 - 從前端接收 localStorage 資料並自動插入
