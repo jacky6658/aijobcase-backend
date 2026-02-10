@@ -882,7 +882,8 @@ app.get('/', (req, res) => {
         import: 'POST /api/ai/import - AI 助理匯入案件',
         query: 'GET /api/ai/leads - AI 助理查詢案件',
         cost: 'POST /api/ai/cost - AI 助理匯入成本',
-        profit: 'POST /api/ai/profit - AI 助理匯入利潤'
+        profit: 'POST /api/ai/profit - AI 助理匯入利潤',
+        attachment: 'POST /api/ai/attachment - AI 助理上傳附件'
       }
     },
     database: {
@@ -1060,6 +1061,126 @@ app.get('/api/ai/leads', async (req, res) => {
   } catch (error) {
     console.error('❌ AI 查詢失敗:', error);
     res.status(500).json({ error: '查詢失敗', details: error.message });
+  }
+});
+
+/**
+ * AI 助理上傳附件端點
+ * POST /api/ai/attachment
+ * 
+ * 請求格式：
+ * {
+ *   "case_code": "aijob-001" 或 "lead_id": "xxx",
+ *   "image": "base64 字串或 URL",
+ *   "filename": "screenshot.jpg"（可選）
+ * }
+ * 
+ * 或批量：
+ * {
+ *   "attachments": [{ "case_code": "...", "image": "..." }, ...]
+ * }
+ */
+app.post('/api/ai/attachment', async (req, res) => {
+  try {
+    const { attachments, ...singleAttachment } = req.body;
+    
+    const attachmentsToImport = attachments && Array.isArray(attachments) ? attachments : [singleAttachment];
+    
+    if (attachmentsToImport.length === 0 || (!attachmentsToImport[0].lead_id && !attachmentsToImport[0].case_code)) {
+      return res.status(400).json({ 
+        error: '請提供附件資料',
+        example: {
+          case_code: "aijob-001",
+          image: "base64字串或URL",
+          filename: "screenshot.jpg"
+        }
+      });
+    }
+
+    const results = {
+      success: [],
+      errors: []
+    };
+
+    for (const attachment of attachmentsToImport) {
+      try {
+        // 找到案件
+        let leadResult;
+        if (attachment.lead_id) {
+          leadResult = await pool.query('SELECT id, contracts FROM leads WHERE id = $1', [attachment.lead_id]);
+        } else if (attachment.case_code) {
+          leadResult = await pool.query('SELECT id, contracts FROM leads WHERE case_code = $1', [attachment.case_code]);
+        }
+
+        if (!leadResult || leadResult.rows.length === 0) {
+          results.errors.push({
+            identifier: attachment.lead_id || attachment.case_code,
+            error: '案件不存在'
+          });
+          continue;
+        }
+
+        const lead = leadResult.rows[0];
+        const leadId = lead.id;
+
+        // 讀取現有附件（使用 contracts 欄位存儲）
+        let existingAttachments = [];
+        if (lead.contracts) {
+          existingAttachments = typeof lead.contracts === 'string'
+            ? JSON.parse(lead.contracts)
+            : lead.contracts;
+          if (!Array.isArray(existingAttachments)) existingAttachments = [];
+        }
+
+        // 新增附件
+        const now = new Date().toISOString();
+        const newAttachment = {
+          id: `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          filename: attachment.filename || `screenshot_${Date.now()}.jpg`,
+          data: attachment.image, // base64 或 URL
+          uploaded_by: 'AI 助理 (YuQi)',
+          uploaded_at: now
+        };
+
+        existingAttachments.push(newAttachment);
+
+        // 更新資料庫
+        await pool.query(
+          'UPDATE leads SET contracts = $1, updated_at = $2 WHERE id = $3',
+          [JSON.stringify(existingAttachments), now, leadId]
+        );
+
+        results.success.push({
+          lead_id: leadId,
+          case_code: attachment.case_code,
+          attachment_id: newAttachment.id,
+          filename: newAttachment.filename
+        });
+
+        console.log(`✅ AI 助理上傳附件: ${attachment.case_code || leadId} - ${newAttachment.filename}`);
+
+      } catch (err) {
+        console.error(`❌ AI 助理上傳附件失敗:`, err.message);
+        results.errors.push({
+          identifier: attachment.lead_id || attachment.case_code,
+          error: err.message
+        });
+      }
+    }
+
+    res.json({
+      message: `成功上傳 ${results.success.length} 個附件`,
+      uploaded: results.success.length,
+      failed: results.errors.length,
+      results
+    });
+
+  } catch (error) {
+    console.error('❌ AI 附件上傳端點錯誤:', error);
+    res.status(500).json({ 
+      error: 'AI 附件上傳失敗',
+      details: error.message
+    });
   }
 });
 
