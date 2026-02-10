@@ -880,7 +880,9 @@ app.get('/', (req, res) => {
       },
       ai: {
         import: 'POST /api/ai/import - AI 助理匯入案件',
-        query: 'GET /api/ai/leads - AI 助理查詢案件'
+        query: 'GET /api/ai/leads - AI 助理查詢案件',
+        cost: 'POST /api/ai/cost - AI 助理匯入成本',
+        profit: 'POST /api/ai/profit - AI 助理匯入利潤'
       }
     },
     database: {
@@ -1058,6 +1060,242 @@ app.get('/api/ai/leads', async (req, res) => {
   } catch (error) {
     console.error('❌ AI 查詢失敗:', error);
     res.status(500).json({ error: '查詢失敗', details: error.message });
+  }
+});
+
+/**
+ * AI 助理匯入成本端點
+ * POST /api/ai/cost
+ * 
+ * 請求格式：
+ * {
+ *   "lead_id": "案件ID" 或 "case_code": "aijob-001",
+ *   "item_name": "成本名目",
+ *   "amount": 1000,
+ *   "note": "備註（可選）"
+ * }
+ * 
+ * 或批量：
+ * {
+ *   "costs": [{ "lead_id": "...", "item_name": "...", "amount": ... }, ...]
+ * }
+ */
+app.post('/api/ai/cost', async (req, res) => {
+  try {
+    const { costs, ...singleCost } = req.body;
+    
+    // 判斷是單筆還是批量
+    const costsToImport = costs && Array.isArray(costs) ? costs : [singleCost];
+    
+    if (costsToImport.length === 0 || (!costsToImport[0].lead_id && !costsToImport[0].case_code)) {
+      return res.status(400).json({ 
+        error: '請提供成本資料',
+        example: {
+          case_code: "aijob-001",
+          item_name: "外包費用",
+          amount: 5000,
+          note: "設計外包"
+        }
+      });
+    }
+
+    const results = {
+      success: [],
+      errors: []
+    };
+
+    for (const cost of costsToImport) {
+      try {
+        // 找到案件（支援 lead_id 或 case_code）
+        let leadResult;
+        if (cost.lead_id) {
+          leadResult = await pool.query('SELECT id, cost_records FROM leads WHERE id = $1', [cost.lead_id]);
+        } else if (cost.case_code) {
+          leadResult = await pool.query('SELECT id, cost_records FROM leads WHERE case_code = $1', [cost.case_code]);
+        }
+
+        if (!leadResult || leadResult.rows.length === 0) {
+          results.errors.push({
+            identifier: cost.lead_id || cost.case_code,
+            error: '案件不存在'
+          });
+          continue;
+        }
+
+        const lead = leadResult.rows[0];
+        const leadId = lead.id;
+
+        // 讀取現有成本記錄
+        let existingCosts = [];
+        if (lead.cost_records) {
+          existingCosts = typeof lead.cost_records === 'string'
+            ? JSON.parse(lead.cost_records)
+            : lead.cost_records;
+          if (!Array.isArray(existingCosts)) existingCosts = [];
+        }
+
+        // 新增成本記錄
+        const now = new Date().toISOString();
+        const newCost = {
+          id: `cost_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          lead_id: leadId,
+          item_name: cost.item_name,
+          amount: parseFloat(cost.amount) || 0,
+          author_uid: 'ai-assistant',
+          author_name: 'AI 助理 (YuQi)',
+          created_at: now,
+          note: cost.note || null
+        };
+
+        existingCosts.push(newCost);
+
+        // 更新資料庫
+        await pool.query(
+          'UPDATE leads SET cost_records = $1, updated_at = $2 WHERE id = $3',
+          [JSON.stringify(existingCosts), now, leadId]
+        );
+
+        results.success.push({
+          lead_id: leadId,
+          case_code: cost.case_code,
+          item_name: newCost.item_name,
+          amount: newCost.amount
+        });
+
+        console.log(`✅ AI 助理匯入成本: ${cost.case_code || leadId} - ${newCost.item_name}: $${newCost.amount}`);
+
+      } catch (err) {
+        console.error(`❌ AI 助理匯入成本失敗:`, err.message);
+        results.errors.push({
+          identifier: cost.lead_id || cost.case_code,
+          error: err.message
+        });
+      }
+    }
+
+    res.json({
+      message: `成功匯入 ${results.success.length} 筆成本`,
+      imported: results.success.length,
+      failed: results.errors.length,
+      results
+    });
+
+  } catch (error) {
+    console.error('❌ AI 成本匯入端點錯誤:', error);
+    res.status(500).json({ 
+      error: 'AI 成本匯入失敗',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * AI 助理匯入利潤端點
+ * POST /api/ai/profit
+ * 
+ * 請求格式同成本，欄位：lead_id/case_code, item_name, amount, note
+ */
+app.post('/api/ai/profit', async (req, res) => {
+  try {
+    const { profits, ...singleProfit } = req.body;
+    
+    const profitsToImport = profits && Array.isArray(profits) ? profits : [singleProfit];
+    
+    if (profitsToImport.length === 0 || (!profitsToImport[0].lead_id && !profitsToImport[0].case_code)) {
+      return res.status(400).json({ 
+        error: '請提供利潤資料',
+        example: {
+          case_code: "aijob-001",
+          item_name: "專案收入",
+          amount: 50000,
+          note: "第一期款"
+        }
+      });
+    }
+
+    const results = {
+      success: [],
+      errors: []
+    };
+
+    for (const profit of profitsToImport) {
+      try {
+        let leadResult;
+        if (profit.lead_id) {
+          leadResult = await pool.query('SELECT id, profit_records FROM leads WHERE id = $1', [profit.lead_id]);
+        } else if (profit.case_code) {
+          leadResult = await pool.query('SELECT id, profit_records FROM leads WHERE case_code = $1', [profit.case_code]);
+        }
+
+        if (!leadResult || leadResult.rows.length === 0) {
+          results.errors.push({
+            identifier: profit.lead_id || profit.case_code,
+            error: '案件不存在'
+          });
+          continue;
+        }
+
+        const lead = leadResult.rows[0];
+        const leadId = lead.id;
+
+        let existingProfits = [];
+        if (lead.profit_records) {
+          existingProfits = typeof lead.profit_records === 'string'
+            ? JSON.parse(lead.profit_records)
+            : lead.profit_records;
+          if (!Array.isArray(existingProfits)) existingProfits = [];
+        }
+
+        const now = new Date().toISOString();
+        const newProfit = {
+          id: `profit_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          lead_id: leadId,
+          item_name: profit.item_name,
+          amount: parseFloat(profit.amount) || 0,
+          author_uid: 'ai-assistant',
+          author_name: 'AI 助理 (YuQi)',
+          created_at: now,
+          note: profit.note || null
+        };
+
+        existingProfits.push(newProfit);
+
+        await pool.query(
+          'UPDATE leads SET profit_records = $1, updated_at = $2 WHERE id = $3',
+          [JSON.stringify(existingProfits), now, leadId]
+        );
+
+        results.success.push({
+          lead_id: leadId,
+          case_code: profit.case_code,
+          item_name: newProfit.item_name,
+          amount: newProfit.amount
+        });
+
+        console.log(`✅ AI 助理匯入利潤: ${profit.case_code || leadId} - ${newProfit.item_name}: $${newProfit.amount}`);
+
+      } catch (err) {
+        console.error(`❌ AI 助理匯入利潤失敗:`, err.message);
+        results.errors.push({
+          identifier: profit.lead_id || profit.case_code,
+          error: err.message
+        });
+      }
+    }
+
+    res.json({
+      message: `成功匯入 ${results.success.length} 筆利潤`,
+      imported: results.success.length,
+      failed: results.errors.length,
+      results
+    });
+
+  } catch (error) {
+    console.error('❌ AI 利潤匯入端點錯誤:', error);
+    res.status(500).json({ 
+      error: 'AI 利潤匯入失敗',
+      details: error.message
+    });
   }
 });
 
