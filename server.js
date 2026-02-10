@@ -881,6 +881,7 @@ app.get('/', (req, res) => {
       ai: {
         import: 'POST /api/ai/import - AI 助理匯入案件',
         query: 'GET /api/ai/leads - AI 助理查詢案件',
+        progress: 'POST /api/ai/progress - AI 助理新增進度更新',
         cost: 'POST /api/ai/cost - AI 助理匯入成本',
         profit: 'POST /api/ai/profit - AI 助理匯入利潤',
         attachment: 'POST /api/ai/attachment - AI 助理上傳附件'
@@ -1061,6 +1062,95 @@ app.get('/api/ai/leads', async (req, res) => {
   } catch (error) {
     console.error('❌ AI 查詢失敗:', error);
     res.status(500).json({ error: '查詢失敗', details: error.message });
+  }
+});
+
+/**
+ * AI 助理新增進度更新端點
+ * POST /api/ai/progress
+ * 
+ * 請求格式：
+ * {
+ *   "case_code": "aijob-001" 或 "lead_id": "xxx",
+ *   "content": "進度內容",
+ *   "attachments": ["base64或URL"]（可選）
+ * }
+ */
+app.post('/api/ai/progress', async (req, res) => {
+  try {
+    const { lead_id, case_code, content, attachments } = req.body;
+    
+    if (!lead_id && !case_code) {
+      return res.status(400).json({ 
+        error: '請提供 lead_id 或 case_code',
+        example: {
+          case_code: "aijob-001",
+          content: "進度內容..."
+        }
+      });
+    }
+
+    if (!content) {
+      return res.status(400).json({ error: '請提供進度內容 (content)' });
+    }
+
+    // 找到案件
+    let leadResult;
+    if (lead_id) {
+      leadResult = await pool.query('SELECT id, progress_updates FROM leads WHERE id = $1', [lead_id]);
+    } else if (case_code) {
+      leadResult = await pool.query('SELECT id, progress_updates FROM leads WHERE case_code = $1', [case_code]);
+    }
+
+    if (!leadResult || leadResult.rows.length === 0) {
+      return res.status(404).json({ error: '案件不存在' });
+    }
+
+    const lead = leadResult.rows[0];
+    const leadId = lead.id;
+
+    // 讀取現有進度更新
+    let existingProgress = [];
+    if (lead.progress_updates) {
+      existingProgress = typeof lead.progress_updates === 'string'
+        ? JSON.parse(lead.progress_updates)
+        : lead.progress_updates;
+      if (!Array.isArray(existingProgress)) existingProgress = [];
+    }
+
+    // 新增進度更新
+    const now = new Date().toISOString();
+    const newProgress = {
+      id: `progress_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      lead_id: leadId,
+      content: content,
+      author_uid: 'ai-assistant',
+      author_name: 'AI 助理 (YuQi)',
+      created_at: now,
+      attachments: attachments || []
+    };
+
+    existingProgress.push(newProgress);
+
+    // 更新資料庫
+    await pool.query(
+      'UPDATE leads SET progress_updates = $1, updated_at = $2 WHERE id = $3',
+      [JSON.stringify(existingProgress), now, leadId]
+    );
+
+    console.log(`✅ AI 助理新增進度更新: ${case_code || leadId}`);
+
+    res.json({
+      message: '成功新增進度更新',
+      progress: newProgress
+    });
+
+  } catch (error) {
+    console.error('❌ AI 進度更新端點錯誤:', error);
+    res.status(500).json({ 
+      error: 'AI 進度更新失敗',
+      details: error.message
+    });
   }
 });
 
